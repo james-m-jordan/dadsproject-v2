@@ -96,6 +96,26 @@ def load_data():
         st.info("🎭 Loading demo data instead...")
         return create_demo_data()
 
+def validate_uploaded_data(df):
+    """Validate that uploaded data has the expected structure"""
+    required_cols = ['WorkRef']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        return False, f"Missing required columns: {missing_cols}"
+    
+    # Check for sales columns
+    sales_cols = [col for col in df.columns if 'Net Sales $' in col]
+    if not sales_cols:
+        return False, "No 'Net Sales $' columns found. Please ensure your CSV has sales data columns."
+    
+    # Check for quantity columns
+    quantity_cols = [col for col in df.columns if 'Net Sales Q' in col]
+    if not quantity_cols:
+        return False, "No 'Net Sales Q' columns found. Please ensure your CSV has quantity data columns."
+    
+    return True, "Data validation passed"
+
 def create_demo_data():
     """Create demo data for testing purposes"""
     np.random.seed(42)
@@ -257,6 +277,95 @@ def main():
     # Sidebar controls
     st.sidebar.header("📊 Dashboard Controls")
     
+    # Data upload section
+    st.sidebar.subheader("📁 Data Upload")
+    st.sidebar.markdown("**Upload your publishing data CSV file**")
+    
+    # Download template button
+    template_data = {
+        'WorkRef': ['w1', 'w2', 'w3'],
+        'BookType': ['Monograph', 'Textbook', 'Reference'],
+        'Discipline': ['Economics', 'History', 'Literature'],
+        'JJ: Reporting Type 2': ['a. Print', 'b. eBook', 'a. Print'],
+        'FiscalYearOfPublication': [2020, 2021, 2019],
+        'PubDate': ['2020-01-15', '2021-03-22', '2019-11-08'],
+        'Imprint': ['University Press', 'Academic Press', 'Scholarly Press'],
+        '" Net Sales $ \n2022 "': [1500, 2500, 800],
+        '" Net Sales $ \n2023 "': [1800, 2800, 950],
+        '" Net Sales $ \n2024 "': [2000, 3000, 1200],
+        '" Net Sales Q\n2022 "': [25, 50, 15],
+        '" Net Sales Q\n2023 "': [30, 55, 18],
+        '" Net Sales Q\n2024 "': [35, 60, 22]
+    }
+    template_df = pd.DataFrame(template_data)
+    template_csv = template_df.to_csv(index=False)
+    
+    st.sidebar.download_button(
+        label="📥 Download Template CSV",
+        data=template_csv,
+        file_name="bookdata_template.csv",
+        mime="text/csv",
+        help="Download a template CSV file showing the expected format"
+    )
+    
+    uploaded_file = st.sidebar.file_uploader(
+        "Choose CSV file",
+        type=['csv'],
+        help="Upload your bookdataonly.csv file to use real data instead of demo data"
+    )
+    
+    # Load data based on upload
+    if uploaded_file is not None:
+        try:
+            # Load uploaded data
+            df_uploaded = pd.read_csv(uploaded_file)
+            
+            # Validate the uploaded data
+            is_valid, validation_message = validate_uploaded_data(df_uploaded)
+            if not is_valid:
+                st.sidebar.error(f"❌ {validation_message}")
+                st.sidebar.error("Please upload a properly formatted CSV file.")
+                df, sales_cols, quantity_cols = load_data()
+            else:
+                # Process the uploaded data similar to load_data function
+                df_uploaded.columns = df_uploaded.columns.str.strip()
+                df_uploaded['Index'] = df_uploaded['WorkRef'].astype(str) + '_' + df_uploaded.index.astype(str)
+                
+                # Extract year columns for sales data
+                sales_cols = [col for col in df_uploaded.columns if 'Net Sales $' in col and any(str(year) in col for year in range(2016, 2025))]
+                quantity_cols = [col for col in df_uploaded.columns if 'Net Sales Q' in col and any(str(year) in col for year in range(2016, 2025))]
+                
+                # Clean financial data
+                for col in sales_cols:
+                    df_uploaded[col] = df_uploaded[col].astype(str).str.replace('$', '').str.replace(',', '').str.replace('(', '-').str.replace(')', '').str.replace(' ', '')
+                    df_uploaded[col] = pd.to_numeric(df_uploaded[col], errors='coerce').fillna(0)
+                
+                for col in quantity_cols:
+                    df_uploaded[col] = pd.to_numeric(df_uploaded[col], errors='coerce').fillna(0)
+                
+                # Convert dates
+                df_uploaded['PubDate'] = pd.to_datetime(df_uploaded['PubDate'], errors='coerce')
+                df_uploaded['FiscalYearOfPublication'] = pd.to_numeric(df_uploaded['FiscalYearOfPublication'], errors='coerce')
+                
+                # Use uploaded data
+                df, sales_cols, quantity_cols = df_uploaded, sales_cols, quantity_cols
+                st.sidebar.success(f"✅ Uploaded data loaded successfully! ({len(df):,} titles)")
+                
+                # Show data preview option
+                if st.sidebar.checkbox("Show Data Preview"):
+                    st.sidebar.write("**Sample of uploaded data:**")
+                    st.sidebar.dataframe(df.head(3)[['Index', 'BookType', 'Discipline']].fillna('N/A'))
+            
+        except Exception as e:
+            st.sidebar.error(f"❌ Error processing uploaded file: {str(e)}")
+            st.sidebar.error("Please make sure your CSV file has the required columns.")
+            df, sales_cols, quantity_cols = load_data()
+    else:
+        # Use default data loading (demo or local file)
+        df, sales_cols, quantity_cols = load_data()
+        if df is not None and len(df) == 1000:  # Demo data indicator
+            st.sidebar.info("📊 Currently using demo data. Upload your CSV file above to use real data.")
+    
     # Analysis options
     analysis_type = st.sidebar.selectbox(
         "Select Analysis Type",
@@ -274,6 +383,14 @@ def main():
     
     # Create time series data
     yearly_data = create_time_series_data(df, sales_cols, quantity_cols)
+    
+    # Data source indicator
+    if uploaded_file is not None:
+        st.info(f"📊 **Using uploaded data**: {uploaded_file.name} ({len(df):,} titles)")
+    elif df is not None and len(df) == 1000:
+        st.warning("🎭 **Using demo data** - Upload your CSV file in the sidebar to analyze real data")
+    else:
+        st.success("📊 **Using local data file**")
     
     # Main dashboard content
     if analysis_type == "Overview":
