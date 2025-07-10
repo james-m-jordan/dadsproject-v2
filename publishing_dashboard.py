@@ -65,7 +65,6 @@ def load_data():
         
         if df is None:
             # Create demo data if no file is found
-            st.warning("📊 Data file not found. Using demo data for demonstration purposes.")
             return create_demo_data()
         
         # Clean column names
@@ -92,8 +91,6 @@ def load_data():
         
         return df, sales_cols, quantity_cols
     except Exception as e:
-        st.error(f"Error loading data: {str(e)}")
-        st.info("🎭 Loading demo data instead...")
         return create_demo_data()
 
 def validate_uploaded_data(df):
@@ -273,7 +270,12 @@ def create_projections(yearly_data, method='linear', years_ahead=5):
 
 def create_category_analysis(df, sales_cols):
     """Analyze data by publishing categories"""
-    category_cols = ['JJ: Reporting Type 2', 'BookType', 'Discipline']
+    category_cols = [
+        'JJ: Reporting Type 2', 'BookType', 'Discipline', 'AcquisitionEditor',
+        'Edition Status', 'c_ReportingProductType', 'CatalogPosition', 
+        'PrincetonLegacyLibrary', 'CoPub', 'Finance - Title counts type III',
+        'Finance - IP Book Type', 'HighInvestmentGroup'
+    ]
     
     # Find the most recent sales column
     latest_sales_col = None
@@ -425,16 +427,13 @@ def main():
     # Analysis options
     analysis_type = st.sidebar.selectbox(
         "Select Analysis Type",
-        ["Overview", "Time Series Analysis", "Category Analysis", "Projections", "Title Performance"]
+        ["Overview", "Time Series Analysis", "Category Analysis", "Editorial Analysis", 
+         "Format & Product Analysis", "Investment Analysis", "Projections", "Title Performance"]
     )
     
     # Projection settings
     if analysis_type == "Projections":
         st.sidebar.subheader("Projection Settings")
-        projection_method = st.sidebar.selectbox(
-            "Projection Method",
-            ["linear", "polynomial", "exponential_smoothing"]
-        )
         projection_years = st.sidebar.slider("Years to Project", 1, 5, 3)
     
     # Create time series data
@@ -442,10 +441,10 @@ def main():
     
     # Data source indicator
     if uploaded_file is not None:
-        st.info(f"📊 **Using uploaded data**: {uploaded_file.name} ({len(df):,} titles)")
-    elif df is not None and len(df) == 1000:
+        st.success(f"📊 **Using uploaded data**: {uploaded_file.name} ({len(df):,} titles)")
+    elif df is not None and len(df) == 1000 and uploaded_file is None:
         st.warning("🎭 **Using demo data** - Upload your CSV file in the sidebar to analyze real data")
-    else:
+    elif df is not None and uploaded_file is None:
         st.success("📊 **Using local data file**")
     
     # Check if we have any usable data
@@ -567,55 +566,325 @@ def main():
                     fig.update_layout(height=400)
                     st.plotly_chart(fig, use_container_width=True)
     
+    elif analysis_type == "Editorial Analysis":
+        st.header("👩‍💼 Editorial Analysis")
+        
+        if 'AcquisitionEditor' in df.columns and sales_cols:
+            # Editor performance analysis
+            latest_sales_col = None
+            if sales_cols:
+                year_cols = []
+                for col in sales_cols:
+                    for year in range(2024, 2015, -1):
+                        if str(year) in col:
+                            year_cols.append((year, col))
+                            break
+                if year_cols:
+                    year_cols.sort(reverse=True)
+                    latest_sales_col = year_cols[0][1]
+            
+            if latest_sales_col:
+                st.subheader("Editor Performance Analysis")
+                
+                # Calculate editor metrics
+                editor_metrics = df.groupby('AcquisitionEditor').agg({
+                    latest_sales_col: ['sum', 'mean', 'count'],
+                    'Index': 'count'
+                }).round(2)
+                
+                editor_metrics.columns = ['Total_Sales', 'Avg_Sales_Per_Title', 'Active_Titles', 'Total_Titles']
+                editor_metrics = editor_metrics.sort_values('Total_Sales', ascending=False).head(15)
+                
+                # Editor performance chart
+                fig = px.bar(
+                    x=editor_metrics.index,
+                    y=editor_metrics['Total_Sales'],
+                    title='Total Sales by Acquisition Editor',
+                    labels={'x': 'Editor', 'y': 'Total Sales ($)'}
+                )
+                fig.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Editor efficiency analysis
+                st.subheader("Editor Efficiency Metrics")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig = px.scatter(
+                        x=editor_metrics['Total_Titles'],
+                        y=editor_metrics['Avg_Sales_Per_Title'],
+                        hover_name=editor_metrics.index,
+                        title='Titles vs. Average Sales per Title',
+                        labels={'x': 'Total Titles', 'y': 'Avg Sales per Title ($)'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    st.write("**Top Editors by Total Sales:**")
+                    top_editors = editor_metrics.head(10).copy()
+                    top_editors['Total_Sales'] = top_editors['Total_Sales'].apply(lambda x: f"${x:,.0f}")
+                    top_editors['Avg_Sales_Per_Title'] = top_editors['Avg_Sales_Per_Title'].apply(lambda x: f"${x:,.0f}")
+                    st.dataframe(top_editors)
+        
+        # Edition status analysis
+        if 'Edition Status' in df.columns:
+            st.subheader("Edition Status Analysis")
+            
+            status_counts = df['Edition Status'].value_counts()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                fig = px.pie(
+                    values=status_counts.values,
+                    names=status_counts.index,
+                    title='Distribution of Edition Status'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                if latest_sales_col:
+                    status_sales = df.groupby('Edition Status')[latest_sales_col].sum().sort_values(ascending=False)
+                    fig = px.bar(
+                        x=status_sales.index,
+                        y=status_sales.values,
+                        title='Sales by Edition Status',
+                        labels={'x': 'Edition Status', 'y': 'Sales ($)'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+    
+    elif analysis_type == "Format & Product Analysis":
+        st.header("📚 Format & Product Analysis")
+        
+        if 'c_ReportingProductType' in df.columns and sales_cols:
+            latest_sales_col = None
+            if sales_cols:
+                year_cols = []
+                for col in sales_cols:
+                    for year in range(2024, 2015, -1):
+                        if str(year) in col:
+                            year_cols.append((year, col))
+                            break
+                if year_cols:
+                    year_cols.sort(reverse=True)
+                    latest_sales_col = year_cols[0][1]
+            
+            if latest_sales_col:
+                st.subheader("Product Format Performance")
+                
+                # Format analysis
+                format_analysis = df.groupby('c_ReportingProductType').agg({
+                    latest_sales_col: ['sum', 'mean', 'count'],
+                    'Index': 'count'
+                }).round(2)
+                
+                format_analysis.columns = ['Total_Sales', 'Avg_Sales', 'Active_Titles', 'Total_Titles']
+                format_analysis = format_analysis.sort_values('Total_Sales', ascending=False)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig = px.bar(
+                        x=format_analysis.index,
+                        y=format_analysis['Total_Sales'],
+                        title='Sales by Product Format',
+                        labels={'x': 'Product Format', 'y': 'Total Sales ($)'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    fig = px.pie(
+                        values=format_analysis['Total_Titles'],
+                        names=format_analysis.index,
+                        title='Title Count by Format'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Format performance table
+                st.subheader("Format Performance Summary")
+                format_display = format_analysis.copy()
+                format_display['Total_Sales'] = format_display['Total_Sales'].apply(lambda x: f"${x:,.0f}")
+                format_display['Avg_Sales'] = format_display['Avg_Sales'].apply(lambda x: f"${x:,.0f}")
+                st.dataframe(format_display)
+        
+        # Catalog position analysis
+        if 'CatalogPosition' in df.columns and latest_sales_col:
+            st.subheader("Catalog Position Impact")
+            
+            catalog_analysis = df.groupby('CatalogPosition')[latest_sales_col].agg(['sum', 'mean', 'count']).round(2)
+            catalog_analysis.columns = ['Total_Sales', 'Avg_Sales', 'Title_Count']
+            catalog_analysis = catalog_analysis.sort_values('Total_Sales', ascending=False)
+            
+            if not catalog_analysis.empty:
+                fig = px.bar(
+                    x=catalog_analysis.index,
+                    y=catalog_analysis['Avg_Sales'],
+                    title='Average Sales by Catalog Position',
+                    labels={'x': 'Catalog Position', 'y': 'Average Sales ($)'}
+                )
+                fig.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+    
+    elif analysis_type == "Investment Analysis":
+        st.header("💰 Investment Analysis")
+        
+        if latest_sales_col:
+            # Legacy vs Contemporary Analysis
+            if 'PrincetonLegacyLibrary' in df.columns:
+                st.subheader("Legacy vs Contemporary Performance")
+                
+                legacy_analysis = df.groupby('PrincetonLegacyLibrary')[latest_sales_col].agg(['sum', 'mean', 'count']).round(2)
+                legacy_analysis.columns = ['Total_Sales', 'Avg_Sales', 'Title_Count']
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig = px.bar(
+                        x=legacy_analysis.index,
+                        y=legacy_analysis['Total_Sales'],
+                        title='Total Sales: Legacy vs Contemporary',
+                        labels={'x': 'Legacy Library', 'y': 'Total Sales ($)'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    fig = px.bar(
+                        x=legacy_analysis.index,
+                        y=legacy_analysis['Avg_Sales'],
+                        title='Average Sales: Legacy vs Contemporary',
+                        labels={'x': 'Legacy Library', 'y': 'Average Sales ($)'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # High Investment Group Analysis
+            if 'HighInvestmentGroup' in df.columns:
+                st.subheader("Investment Group Performance")
+                
+                investment_analysis = df.groupby('HighInvestmentGroup')[latest_sales_col].agg(['sum', 'mean', 'count']).round(2)
+                investment_analysis.columns = ['Total_Sales', 'Avg_Sales', 'Title_Count']
+                
+                fig = px.scatter(
+                    x=investment_analysis['Title_Count'],
+                    y=investment_analysis['Avg_Sales'],
+                    hover_name=investment_analysis.index,
+                    title='Investment Group: Title Count vs Average Sales',
+                    labels={'x': 'Title Count', 'y': 'Average Sales ($)'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Co-publishing Analysis
+            if 'CoPub' in df.columns:
+                st.subheader("Co-Publishing Impact")
+                
+                copub_analysis = df.groupby('CoPub')[latest_sales_col].agg(['sum', 'mean', 'count']).round(2)
+                copub_analysis.columns = ['Total_Sales', 'Avg_Sales', 'Title_Count']
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.metric("Co-Published Titles", copub_analysis.loc['Yes', 'Title_Count'] if 'Yes' in copub_analysis.index else 0)
+                    st.metric("Non Co-Published Titles", copub_analysis.loc['No', 'Title_Count'] if 'No' in copub_analysis.index else 0)
+                
+                with col2:
+                    if 'Yes' in copub_analysis.index and 'No' in copub_analysis.index:
+                        copub_avg = copub_analysis.loc['Yes', 'Avg_Sales']
+                        non_copub_avg = copub_analysis.loc['No', 'Avg_Sales']
+                        st.metric("Co-Pub Avg Sales", f"${copub_avg:,.0f}")
+                        st.metric("Non Co-Pub Avg Sales", f"${non_copub_avg:,.0f}")
+    
     elif analysis_type == "Projections":
         st.header("🔮 Sales Projections")
         
         if not yearly_data.empty:
-            # Create projections
-            projections = create_projections(yearly_data, projection_method, projection_years)
+            # Create projections using all three methods
+            methods = ['linear', 'polynomial', 'exponential_smoothing']
+            all_projections = []
             
-            if not projections.empty:
-                # Combine historical and projected data
-                combined_data = pd.concat([yearly_data, projections], ignore_index=True)
-                combined_data['Data_Type'] = ['Historical'] * len(yearly_data) + ['Projected'] * len(projections)
+            for method in methods:
+                projections = create_projections(yearly_data, method, projection_years)
+                if not projections.empty:
+                    projections['Method'] = method.replace('_', ' ').title()
+                    all_projections.append(projections)
+            
+            if all_projections:
+                # Combine all projections
+                combined_projections = pd.concat(all_projections, ignore_index=True)
                 
-                # Sales projections
-                st.subheader("Sales Projections")
-                fig = px.line(combined_data, x='Year', y='Total_Sales', color='Data_Type',
-                             title=f'Sales Projections ({projection_method.title()} Method)',
-                             labels={'Total_Sales': 'Sales ($)'})
-                fig.update_layout(height=400)
+                # Create comprehensive projection chart
+                st.subheader("Multi-Method Sales Projections")
+                
+                # Create figure with historical + all projections
+                fig = go.Figure()
+                
+                # Add historical data
+                fig.add_trace(go.Scatter(
+                    x=yearly_data['Year'],
+                    y=yearly_data['Total_Sales'],
+                    mode='lines+markers',
+                    name='Historical Data',
+                    line=dict(color='#1f77b4', width=3),
+                    marker=dict(size=8)
+                ))
+                
+                # Add projection lines
+                colors = ['#ff7f0e', '#2ca02c', '#d62728']
+                for i, method in enumerate(['Linear', 'Polynomial', 'Exponential Smoothing']):
+                    method_data = combined_projections[combined_projections['Method'] == method]
+                    if not method_data.empty:
+                        fig.add_trace(go.Scatter(
+                            x=method_data['Year'],
+                            y=method_data['Total_Sales'],
+                            mode='lines+markers',
+                            name=f'{method} Projection',
+                            line=dict(color=colors[i], width=2, dash='dash'),
+                            marker=dict(size=6)
+                        ))
+                
+                fig.update_layout(
+                    title='Sales Projections: Multi-Method Comparison',
+                    xaxis_title='Year',
+                    yaxis_title='Sales ($)',
+                    height=500,
+                    hovermode='x unified'
+                )
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Projection summary
-                st.subheader("Projection Summary")
-                col1, col2 = st.columns(2)
+                # Projection summary table
+                st.subheader("Projection Summary by Method")
                 
-                with col1:
-                    st.markdown("**3-Year Projection (2027)**")
-                    if 2027 in projections['Year'].values:
-                        proj_2027 = projections[projections['Year'] == 2027].iloc[0]
-                        st.metric("Projected Sales", f"${proj_2027['Total_Sales']:,.0f}")
-                        st.metric("Projected Active Titles", f"{proj_2027['Active_Titles']:,.0f}")
-                        st.metric("Revenue per Title", f"${proj_2027['Revenue_Per_Title']:,.0f}")
+                # Create summary table
+                summary_data = []
+                target_years = [2027, 2029]
                 
-                with col2:
-                    st.markdown("**5-Year Projection (2029)**")
-                    if 2029 in projections['Year'].values:
-                        proj_2029 = projections[projections['Year'] == 2029].iloc[0]
-                        st.metric("Projected Sales", f"${proj_2029['Total_Sales']:,.0f}")
-                        st.metric("Projected Active Titles", f"{proj_2029['Active_Titles']:,.0f}")
-                        st.metric("Revenue per Title", f"${proj_2029['Revenue_Per_Title']:,.0f}")
+                for year in target_years:
+                    if year <= 2024 + projection_years:
+                        year_data = {'Year': year}
+                        for method in ['Linear', 'Polynomial', 'Exponential Smoothing']:
+                            method_data = combined_projections[
+                                (combined_projections['Method'] == method) & 
+                                (combined_projections['Year'] == year)
+                            ]
+                            if not method_data.empty:
+                                sales = method_data['Total_Sales'].iloc[0]
+                                year_data[f'{method} Sales'] = f"${sales:,.0f}"
+                            else:
+                                year_data[f'{method} Sales'] = "N/A"
+                        summary_data.append(year_data)
                 
-                # Detailed projections table
-                st.subheader("Detailed Projections")
-                proj_display = projections.copy()
-                proj_display['Total_Sales'] = proj_display['Total_Sales'].apply(lambda x: f"${x:,.0f}")
-                proj_display['Total_Quantity'] = proj_display['Total_Quantity'].apply(lambda x: f"{x:,.0f}")
-                proj_display['Active_Titles'] = proj_display['Active_Titles'].apply(lambda x: f"{x:,.0f}")
-                proj_display['Revenue_Per_Title'] = proj_display['Revenue_Per_Title'].apply(lambda x: f"${x:,.0f}")
+                if summary_data:
+                    summary_df = pd.DataFrame(summary_data)
+                    st.dataframe(summary_df, use_container_width=True)
                 
-                st.dataframe(proj_display, use_container_width=True)
+                # Method comparison insights
+                st.subheader("Method Comparison")
+                st.markdown("""
+                **📊 Projection Methods Explained:**
+                - **Linear**: Assumes constant growth trend - most conservative
+                - **Polynomial**: Captures non-linear patterns - moderate flexibility  
+                - **Exponential Smoothing**: Weighted recent data - most adaptive
+                """)
+                
+            else:
+                st.warning("Unable to generate projections with available data.")
     
     elif analysis_type == "Title Performance":
         st.header("📖 Title Performance Analysis")
