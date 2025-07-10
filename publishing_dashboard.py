@@ -173,18 +173,44 @@ def create_time_series_data(df, sales_cols, quantity_cols):
     """Create aggregated time series data"""
     years = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024]
     
+    # Create mappings of years to actual column names
+    sales_year_map = {}
+    qty_year_map = {}
+    
+    for year in years:
+        # Find sales column for this year
+        sales_col = None
+        for col in sales_cols:
+            if str(year) in col:
+                sales_col = col
+                break
+        if sales_col:
+            sales_year_map[year] = sales_col
+        
+        # Find quantity column for this year
+        qty_col = None
+        for col in quantity_cols:
+            if str(year) in col:
+                qty_col = col
+                break
+        if qty_col:
+            qty_year_map[year] = qty_col
+    
     # Aggregate by year
     yearly_data = []
     for year in years:
-        sales_col = f'" Net Sales $ \n{year} "'
-        qty_col = f'" Net Sales Q\n{year} "'
-        
-        if sales_col in sales_cols and qty_col in quantity_cols:
+        if year in sales_year_map:
+            sales_col = sales_year_map[year]
             total_sales = df[sales_col].sum()
-            total_qty = df[qty_col].sum()
             
             # Count active titles (with sales > 0)
             active_titles = (df[sales_col] > 0).sum()
+            
+            # Get quantity data if available
+            total_qty = 0
+            if year in qty_year_map:
+                qty_col = qty_year_map[year]
+                total_qty = df[qty_col].sum()
             
             yearly_data.append({
                 'Year': year,
@@ -245,22 +271,42 @@ def create_projections(yearly_data, method='linear', years_ahead=5):
     
     return proj_df
 
-def create_category_analysis(df):
+def create_category_analysis(df, sales_cols):
     """Analyze data by publishing categories"""
     category_cols = ['JJ: Reporting Type 2', 'BookType', 'Discipline']
+    
+    # Find the most recent sales column
+    latest_sales_col = None
+    if sales_cols:
+        # Sort by year and get the latest one
+        year_cols = []
+        for col in sales_cols:
+            for year in range(2024, 2015, -1):  # Check from 2024 down to 2016
+                if str(year) in col:
+                    year_cols.append((year, col))
+                    break
+        if year_cols:
+            year_cols.sort(reverse=True)
+            latest_sales_col = year_cols[0][1]
+    
+    if not latest_sales_col:
+        return {}
     
     analysis = {}
     for cat_col in category_cols:
         if cat_col in df.columns:
-            # Get sales by category
-            cat_sales = df.groupby(cat_col)['" Net Sales $ \n2024 "'].sum().sort_values(ascending=False)
-            cat_counts = df.groupby(cat_col).size()
-            
-            analysis[cat_col] = {
-                'sales': cat_sales,
-                'counts': cat_counts,
-                'revenue_per_title': cat_sales / cat_counts
-            }
+            try:
+                # Get sales by category
+                cat_sales = df.groupby(cat_col)[latest_sales_col].sum().sort_values(ascending=False)
+                cat_counts = df.groupby(cat_col).size()
+                
+                analysis[cat_col] = {
+                    'sales': cat_sales,
+                    'counts': cat_counts,
+                    'revenue_per_title': cat_sales / cat_counts.replace(0, 1)  # Avoid division by zero
+                }
+            except Exception as e:
+                continue
     
     return analysis
 
@@ -354,7 +400,17 @@ def main():
                 # Show data preview option
                 if st.sidebar.checkbox("Show Data Preview"):
                     st.sidebar.write("**Sample of uploaded data:**")
-                    st.sidebar.dataframe(df.head(3)[['Index', 'BookType', 'Discipline']].fillna('N/A'))
+                    preview_cols = ['Index']
+                    for col in ['BookType', 'Discipline', 'Imprint']:
+                        if col in df.columns:
+                            preview_cols.append(col)
+                    st.sidebar.dataframe(df.head(3)[preview_cols].fillna('N/A'))
+                    
+                    # Show detected columns
+                    st.sidebar.write("**Detected columns:**")
+                    st.sidebar.write(f"📊 Sales columns: {len(sales_cols)}")
+                    st.sidebar.write(f"📈 Quantity columns: {len(quantity_cols)}")
+                    st.sidebar.write(f"📚 Total columns: {len(df.columns)}")
             
         except Exception as e:
             st.sidebar.error(f"❌ Error processing uploaded file: {str(e)}")
@@ -392,6 +448,17 @@ def main():
     else:
         st.success("📊 **Using local data file**")
     
+    # Check if we have any usable data
+    if df is None or len(df) == 0:
+        st.error("❌ No data available for analysis. Please upload a CSV file.")
+        return
+    
+    if not sales_cols:
+        st.warning("⚠️ No sales columns detected in the data. Some analysis features may be limited.")
+    
+    if yearly_data.empty:
+        st.warning("⚠️ No time series data available. Some analysis features may be limited.")
+    
     # Main dashboard content
     if analysis_type == "Overview":
         st.header("📈 Portfolio Overview")
@@ -404,16 +471,27 @@ def main():
             st.metric("Total Titles", f"{total_titles:,}")
         
         with col2:
-            current_year_sales = yearly_data['Total_Sales'].iloc[-1] if not yearly_data.empty else 0
-            st.metric("2024 Sales", f"${current_year_sales:,.0f}")
+            if not yearly_data.empty:
+                current_year_sales = yearly_data['Total_Sales'].iloc[-1]
+                latest_year = yearly_data['Year'].iloc[-1]
+                st.metric(f"{latest_year} Sales", f"${current_year_sales:,.0f}")
+            else:
+                st.metric("Sales", "No data")
         
         with col3:
-            active_titles = yearly_data['Active_Titles'].iloc[-1] if not yearly_data.empty else 0
-            st.metric("Active Titles 2024", f"{active_titles:,}")
+            if not yearly_data.empty:
+                active_titles = yearly_data['Active_Titles'].iloc[-1]
+                latest_year = yearly_data['Year'].iloc[-1]
+                st.metric(f"Active Titles {latest_year}", f"{active_titles:,}")
+            else:
+                st.metric("Active Titles", "No data")
         
         with col4:
-            revenue_per_title = yearly_data['Revenue_Per_Title'].iloc[-1] if not yearly_data.empty else 0
-            st.metric("Revenue per Title", f"${revenue_per_title:,.0f}")
+            if not yearly_data.empty:
+                revenue_per_title = yearly_data['Revenue_Per_Title'].iloc[-1]
+                st.metric("Revenue per Title", f"${revenue_per_title:,.0f}")
+            else:
+                st.metric("Revenue per Title", "No data")
         
         # Overview charts
         if not yearly_data.empty:
@@ -467,7 +545,7 @@ def main():
     elif analysis_type == "Category Analysis":
         st.header("📚 Category Analysis")
         
-        category_analysis = create_category_analysis(df)
+        category_analysis = create_category_analysis(df, sales_cols)
         
         for cat_name, cat_data in category_analysis.items():
             st.subheader(f"Analysis by {cat_name}")
@@ -542,32 +620,65 @@ def main():
     elif analysis_type == "Title Performance":
         st.header("📖 Title Performance Analysis")
         
-        # Top performers
-        st.subheader("Top Performing Titles (2024)")
+        # Find the most recent sales column
+        latest_sales_col = None
+        latest_year = None
+        if sales_cols:
+            year_cols = []
+            for col in sales_cols:
+                for year in range(2024, 2015, -1):
+                    if str(year) in col:
+                        year_cols.append((year, col))
+                        break
+            if year_cols:
+                year_cols.sort(reverse=True)
+                latest_year, latest_sales_col = year_cols[0]
         
-        top_titles = df.nlargest(20, '" Net Sales $ \n2024 "')[
-            ['Index', 'Imprint', 'BookType', 'Discipline', '" Net Sales $ \n2024 "', 'FiscalYearOfPublication']
-        ].copy()
-        
-        top_titles['" Net Sales $ \n2024 "'] = top_titles['" Net Sales $ \n2024 "'].apply(lambda x: f"${x:,.0f}")
-        
-        st.dataframe(top_titles, use_container_width=True)
+        if latest_sales_col:
+            # Top performers
+            st.subheader(f"Top Performing Titles ({latest_year})")
+            
+            # Select available columns for display
+            display_cols = ['Index']
+            optional_cols = ['Imprint', 'BookType', 'Discipline', 'FiscalYearOfPublication']
+            for col in optional_cols:
+                if col in df.columns:
+                    display_cols.append(col)
+            display_cols.append(latest_sales_col)
+            
+            try:
+                top_titles = df.nlargest(20, latest_sales_col)[display_cols].copy()
+                top_titles[latest_sales_col] = top_titles[latest_sales_col].apply(lambda x: f"${x:,.0f}")
+                st.dataframe(top_titles, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error displaying top titles: {str(e)}")
+        else:
+            st.warning("No sales data available for title performance analysis.")
         
         # Performance by publication year
-        st.subheader("Performance by Publication Year")
-        
-        pub_year_analysis = df.groupby('FiscalYearOfPublication').agg({
-            '" Net Sales $ \n2024 "': 'sum',
-            'Index': 'count'
-        }).reset_index()
-        
-        pub_year_analysis.columns = ['Publication_Year', 'Total_Sales_2024', 'Title_Count']
-        pub_year_analysis = pub_year_analysis[pub_year_analysis['Publication_Year'] >= 2010]
-        
-        fig = px.scatter(pub_year_analysis, x='Publication_Year', y='Total_Sales_2024',
-                        size='Title_Count', title='2024 Sales by Publication Year',
-                        labels={'Total_Sales_2024': '2024 Sales ($)', 'Publication_Year': 'Publication Year'})
-        st.plotly_chart(fig, use_container_width=True)
+        if latest_sales_col and 'FiscalYearOfPublication' in df.columns:
+            st.subheader("Performance by Publication Year")
+            
+            try:
+                pub_year_analysis = df.groupby('FiscalYearOfPublication').agg({
+                    latest_sales_col: 'sum',
+                    'Index': 'count'
+                }).reset_index()
+                
+                pub_year_analysis.columns = ['Publication_Year', f'Total_Sales_{latest_year}', 'Title_Count']
+                pub_year_analysis = pub_year_analysis[pub_year_analysis['Publication_Year'] >= 2010]
+                
+                if not pub_year_analysis.empty:
+                    fig = px.scatter(pub_year_analysis, x='Publication_Year', y=f'Total_Sales_{latest_year}',
+                                    size='Title_Count', title=f'{latest_year} Sales by Publication Year',
+                                    labels={f'Total_Sales_{latest_year}': f'{latest_year} Sales ($)', 'Publication_Year': 'Publication Year'})
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No publication year data available for analysis.")
+            except Exception as e:
+                st.error(f"Error analyzing publication year data: {str(e)}")
+        else:
+            st.info("Publication year analysis requires FiscalYearOfPublication column and sales data.")
     
     # Data export option
     st.sidebar.subheader("Data Export")
