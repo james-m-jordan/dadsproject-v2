@@ -48,8 +48,25 @@ st.markdown("""
 def load_data():
     """Load and process the publishing data"""
     try:
-        # Load the main CSV data
-        df = pd.read_csv('/Users/jimjordan/Documents/dadsproject-v2/bookdataonly.csv')
+        # Try to load the main CSV data
+        csv_paths = [
+            '/Users/jimjordan/Documents/dadsproject-v2/bookdataonly.csv',
+            'bookdataonly.csv',
+            './bookdataonly.csv'
+        ]
+        
+        df = None
+        for path in csv_paths:
+            try:
+                df = pd.read_csv(path)
+                break
+            except FileNotFoundError:
+                continue
+        
+        if df is None:
+            # Create demo data if no file is found
+            st.warning("📊 Data file not found. Using demo data for demonstration purposes.")
+            return create_demo_data()
         
         # Clean column names
         df.columns = df.columns.str.strip()
@@ -76,7 +93,61 @@ def load_data():
         return df, sales_cols, quantity_cols
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
-        return None, None, None
+        st.info("🎭 Loading demo data instead...")
+        return create_demo_data()
+
+def create_demo_data():
+    """Create demo data for testing purposes"""
+    np.random.seed(42)
+    
+    # Create sample data
+    n_titles = 1000
+    years = list(range(2016, 2025))
+    
+    # Generate base data
+    titles_data = []
+    for i in range(n_titles):
+        title_id = f"DEMO_{i+1:04d}"
+        pub_year = np.random.choice(range(2010, 2024))
+        book_type = np.random.choice(['Monograph', 'Textbook', 'Reference', 'Trade'])
+        discipline = np.random.choice(['Economics', 'History', 'Literature', 'Mathematics', 'Political Science', 'Sociology'])
+        
+        # Generate sales data with some growth trend
+        base_sales = np.random.lognormal(6, 1.5)  # Log-normal distribution for realistic sales
+        sales_data = {}
+        qty_data = {}
+        
+        for year in years:
+            # Add some year-over-year variation and trend
+            year_factor = 1 + (year - 2016) * 0.02  # Small growth trend
+            variance = np.random.normal(1, 0.3)
+            sales = max(0, base_sales * year_factor * variance)
+            qty = max(0, int(sales / np.random.uniform(20, 80)))  # Price per unit variation
+            
+            sales_data[f'" Net Sales $ \n{year} "'] = sales
+            qty_data[f'" Net Sales Q\n{year} "'] = qty
+        
+        title_row = {
+            'Index': title_id,
+            'WorkRef': f"w{i+1}",
+            'BookType': book_type,
+            'Discipline': discipline,
+            'JJ: Reporting Type 2': f"{np.random.choice(['a. Print', 'b. eBook'])}",
+            'FiscalYearOfPublication': pub_year,
+            'PubDate': pd.to_datetime(f"{pub_year}-{np.random.randint(1,13):02d}-{np.random.randint(1,29):02d}"),
+            'Imprint': 'Demo University Press',
+            **sales_data,
+            **qty_data
+        }
+        titles_data.append(title_row)
+    
+    df = pd.DataFrame(titles_data)
+    
+    # Create column lists
+    sales_cols = [col for col in df.columns if 'Net Sales $' in col]
+    quantity_cols = [col for col in df.columns if 'Net Sales Q' in col]
+    
+    return df, sales_cols, quantity_cols
 
 def create_time_series_data(df, sales_cols, quantity_cols):
     """Create aggregated time series data"""
