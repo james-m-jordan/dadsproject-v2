@@ -10,7 +10,23 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import r2_score
 import warnings
+import os
+import json
+import io
 warnings.filterwarnings('ignore')
+
+# Configure OpenAI
+try:
+    import openai
+    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if OPENAI_API_KEY:
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    else:
+        client = None
+except ImportError:
+    client = None
+except Exception as e:
+    client = None
 
 # Configure page
 st.set_page_config(
@@ -165,6 +181,172 @@ def create_demo_data():
     quantity_cols = [col for col in df.columns if 'Net Sales Q' in col]
     
     return df, sales_cols, quantity_cols
+
+def analyze_csv_with_ai(df_sample, user_context=""):
+    """Use AI to analyze CSV structure and suggest optimal column mapping"""
+    
+    if not client:
+        return None
+    
+    # Create a sample of the data for AI analysis
+    sample_data = df_sample.head(5).to_string()
+    column_list = list(df_sample.columns)
+    
+    system_prompt = """You are an expert data analyst specializing in publishing and sales analytics. 
+    Your task is to analyze CSV data structures and provide intelligent column mapping suggestions.
+    
+    You should identify:
+    1. Sales/Revenue columns (could be named various ways)
+    2. Quantity/Volume columns 
+    3. Time series columns (years, dates, periods)
+    4. Categorical columns (book types, categories, editors, etc.)
+    5. Identifier columns (IDs, references, indexes)
+    
+    Provide your analysis in JSON format with specific recommendations for dashboard integration."""
+    
+    user_prompt = f"""
+    Please analyze this CSV data structure:
+    
+    COLUMNS: {column_list}
+    
+    SAMPLE DATA:
+    {sample_data}
+    
+    USER CONTEXT: {user_context}
+    
+    Please provide a JSON response with:
+    1. "sales_columns": List of columns that represent sales/revenue data
+    2. "quantity_columns": List of columns that represent quantity/volume data
+    3. "time_columns": List of columns that represent time periods
+    4. "category_columns": List of columns good for categorical analysis
+    5. "identifier_columns": List of columns that serve as identifiers
+    6. "suggested_mapping": Object with recommended column mappings
+    7. "confidence_score": How confident you are in this analysis (0-100)
+    8. "recommendations": Array of specific recommendations for dashboard setup
+    9. "data_quality_notes": Any data quality issues or suggestions
+    
+    Focus on making the data highly analyzable for business intelligence and trend analysis.
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=1500,
+            temperature=0.3
+        )
+        
+        # Parse the JSON response
+        ai_analysis = json.loads(response.choices[0].message.content)
+        return ai_analysis
+        
+    except Exception as e:
+        return None
+
+def get_ai_trend_analysis(df, sales_cols, yearly_data):
+    """Generate AI-powered trend analysis and insights"""
+    
+    if not client:
+        return "AI analysis unavailable - OpenAI not configured"
+    
+    # Prepare data summary for AI
+    if not yearly_data.empty:
+        trend_data = yearly_data.to_string()
+        recent_growth = yearly_data['Total_Sales'].pct_change().iloc[-1] * 100 if len(yearly_data) > 1 else 0
+        
+        # Category insights
+        category_insights = ""
+        if 'Discipline' in df.columns and sales_cols:
+            latest_sales_col = sales_cols[-1] if sales_cols else None
+            if latest_sales_col:
+                top_categories = df.groupby('Discipline')[latest_sales_col].sum().sort_values(ascending=False).head(3)
+                category_insights = f"Top categories: {top_categories.to_string()}"
+    
+    system_prompt = """You are a senior publishing industry analyst with expertise in sales trends, 
+    market analysis, and strategic insights. Provide concise, actionable analysis based on the data patterns you observe."""
+    
+    user_prompt = f"""
+    Analyze this publishing sales data and provide insights:
+    
+    YEARLY TREND DATA:
+    {trend_data}
+    
+    RECENT GROWTH RATE: {recent_growth:.1f}%
+    
+    CATEGORY PERFORMANCE:
+    {category_insights}
+    
+    TOTAL TITLES: {len(df)}
+    
+    Please provide a brief, executive-level analysis (2-3 sentences) covering:
+    1. Key trend observations
+    2. Performance highlights or concerns
+    3. Strategic recommendations
+    
+    Keep it concise and actionable for business decision-making.
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"AI analysis unavailable: {str(e)}"
+
+def chat_with_ai_assistant(user_message, df_info, upload_context):
+    """AI chatbot for guided CSV upload and analysis"""
+    
+    if not client:
+        return "AI assistant unavailable - OpenAI not configured. Please upload your CSV file and the dashboard will automatically detect the structure."
+    
+    system_prompt = """You are a helpful AI assistant specializing in data upload and analysis for publishing analytics.
+    
+    Your role is to:
+    1. Guide users through CSV upload process
+    2. Help interpret their data structure
+    3. Suggest optimal analysis approaches
+    4. Provide context-specific recommendations
+    
+    Be conversational, helpful, and focused on making data analysis accessible.
+    Keep responses concise but informative."""
+    
+    context_prompt = f"""
+    Current context:
+    - Data info: {df_info}
+    - Upload context: {upload_context}
+    
+    User message: {user_message}
+    
+    Provide a helpful response to guide the user with their data analysis needs.
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": context_prompt}
+            ],
+            max_tokens=400,
+            temperature=0.8
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"Sorry, I'm having trouble connecting right now. Please try again: {str(e)}"
 
 def create_time_series_data(df, sales_cols, quantity_cols):
     """Create aggregated time series data"""
@@ -326,35 +508,38 @@ def main():
     st.sidebar.header("📊 Dashboard Controls")
     
     # Data upload section
-    st.sidebar.subheader("📁 Data Upload")
-    st.sidebar.markdown("**Upload your publishing data CSV file**")
+    st.sidebar.subheader("📁 AI-Powered Data Upload")
+    st.sidebar.markdown("**Upload any CSV file - AI will adapt automatically**")
     
-    # Download template button
-    template_data = {
-        'WorkRef': ['w1', 'w2', 'w3'],
-        'BookType': ['Monograph', 'Textbook', 'Reference'],
-        'Discipline': ['Economics', 'History', 'Literature'],
-        'JJ: Reporting Type 2': ['a. Print', 'b. eBook', 'a. Print'],
-        'FiscalYearOfPublication': [2020, 2021, 2019],
-        'PubDate': ['2020-01-15', '2021-03-22', '2019-11-08'],
-        'Imprint': ['University Press', 'Academic Press', 'Scholarly Press'],
-        '" Net Sales $ \n2022 "': [1500, 2500, 800],
-        '" Net Sales $ \n2023 "': [1800, 2800, 950],
-        '" Net Sales $ \n2024 "': [2000, 3000, 1200],
-        '" Net Sales Q\n2022 "': [25, 50, 15],
-        '" Net Sales Q\n2023 "': [30, 55, 18],
-        '" Net Sales Q\n2024 "': [35, 60, 22]
-    }
-    template_df = pd.DataFrame(template_data)
-    template_csv = template_df.to_csv(index=False)
+    # AI Chat Assistant
+    st.sidebar.subheader("🤖 AI Upload Assistant")
     
-    st.sidebar.download_button(
-        label="📥 Download Template CSV",
-        data=template_csv,
-        file_name="bookdata_template.csv",
-        mime="text/csv",
-        help="Download a template CSV file showing the expected format"
-    )
+    # Initialize chat history
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    
+    # Chat interface
+    user_input = st.sidebar.text_input("Ask about your data upload:", placeholder="e.g., 'What columns do I need?'")
+    
+    if user_input:
+        # Get current context
+        df_info = f"No data uploaded yet" if 'df' not in locals() else f"Data loaded: {len(df)} rows"
+        upload_context = "User preparing to upload data"
+        
+        # Get AI response
+        ai_response = chat_with_ai_assistant(user_input, df_info, upload_context)
+        
+        # Add to chat history
+        st.session_state.chat_history.append({"user": user_input, "ai": ai_response})
+    
+    # Display chat history
+    for chat in st.session_state.chat_history[-3:]:  # Show last 3 exchanges
+        st.sidebar.markdown(f"**You:** {chat['user']}")
+        st.sidebar.markdown(f"**AI:** {chat['ai']}")
+        st.sidebar.markdown("---")
+    
+    if st.sidebar.button("Clear Chat"):
+        st.session_state.chat_history = []
     
     uploaded_file = st.sidebar.file_uploader(
         "Choose CSV file",
@@ -368,55 +553,93 @@ def main():
             # Load uploaded data
             df_uploaded = pd.read_csv(uploaded_file)
             
-            # Validate the uploaded data
-            is_valid, validation_message = validate_uploaded_data(df_uploaded)
-            if not is_valid:
-                st.sidebar.error(f"❌ {validation_message}")
-                st.sidebar.error("Please upload a properly formatted CSV file.")
-                df, sales_cols, quantity_cols = load_data()
+            # AI-powered analysis of uploaded data
+            if client:
+                st.sidebar.write("🤖 **AI analyzing your data...**")
+                ai_analysis = analyze_csv_with_ai(df_uploaded, "Publishing sales and analytics data")
             else:
-                # Process the uploaded data similar to load_data function
-                df_uploaded.columns = df_uploaded.columns.str.strip()
-                df_uploaded['Index'] = df_uploaded['WorkRef'].astype(str) + '_' + df_uploaded.index.astype(str)
+                ai_analysis = None
+            
+            if ai_analysis:
+                st.sidebar.success(f"✅ AI Analysis Complete! Confidence: {ai_analysis.get('confidence_score', 0)}%")
                 
-                # Extract year columns for sales data
-                sales_cols = [col for col in df_uploaded.columns if 'Net Sales $' in col and any(str(year) in col for year in range(2016, 2025))]
-                quantity_cols = [col for col in df_uploaded.columns if 'Net Sales Q' in col and any(str(year) in col for year in range(2016, 2025))]
+                # Use AI recommendations for column mapping
+                ai_sales_cols = ai_analysis.get('sales_columns', [])
+                ai_quantity_cols = ai_analysis.get('quantity_columns', [])
+                
+                # Process data using AI recommendations
+                df_uploaded.columns = df_uploaded.columns.str.strip()
+                
+                # Create Index if not exists
+                if 'Index' not in df_uploaded.columns:
+                    if 'WorkRef' in df_uploaded.columns:
+                        df_uploaded['Index'] = df_uploaded['WorkRef'].astype(str) + '_' + df_uploaded.index.astype(str)
+                    else:
+                        df_uploaded['Index'] = 'ID_' + df_uploaded.index.astype(str)
+                
+                # Use AI-detected columns or fall back to pattern matching
+                if ai_sales_cols:
+                    sales_cols = [col for col in ai_sales_cols if col in df_uploaded.columns]
+                else:
+                    sales_cols = [col for col in df_uploaded.columns if any(term in col.lower() for term in ['sales', 'revenue', 'income', '$'])]
+                
+                if ai_quantity_cols:
+                    quantity_cols = [col for col in ai_quantity_cols if col in df_uploaded.columns]
+                else:
+                    quantity_cols = [col for col in df_uploaded.columns if any(term in col.lower() for term in ['quantity', 'units', 'copies', 'q'])]
                 
                 # Clean financial data
                 for col in sales_cols:
-                    df_uploaded[col] = df_uploaded[col].astype(str).str.replace('$', '').str.replace(',', '').str.replace('(', '-').str.replace(')', '').str.replace(' ', '')
+                    if df_uploaded[col].dtype == 'object':
+                        df_uploaded[col] = df_uploaded[col].astype(str).str.replace('$', '').str.replace(',', '').str.replace('(', '-').str.replace(')', '').str.replace(' ', '')
                     df_uploaded[col] = pd.to_numeric(df_uploaded[col], errors='coerce').fillna(0)
                 
                 for col in quantity_cols:
                     df_uploaded[col] = pd.to_numeric(df_uploaded[col], errors='coerce').fillna(0)
                 
-                # Convert dates
-                df_uploaded['PubDate'] = pd.to_datetime(df_uploaded['PubDate'], errors='coerce')
-                df_uploaded['FiscalYearOfPublication'] = pd.to_numeric(df_uploaded['FiscalYearOfPublication'], errors='coerce')
+                # Convert dates intelligently
+                date_cols = ai_analysis.get('time_columns', [])
+                for col in date_cols:
+                    if col in df_uploaded.columns:
+                        df_uploaded[col] = pd.to_datetime(df_uploaded[col], errors='coerce')
                 
-                # Use uploaded data
+                # Use processed data
                 df, sales_cols, quantity_cols = df_uploaded, sales_cols, quantity_cols
-                st.sidebar.success(f"✅ Uploaded data loaded successfully! ({len(df):,} titles)")
+                st.sidebar.success(f"✅ Data processed successfully! ({len(df):,} rows)")
                 
-                # Show data preview option
-                if st.sidebar.checkbox("Show Data Preview"):
-                    st.sidebar.write("**Sample of uploaded data:**")
-                    preview_cols = ['Index']
-                    for col in ['BookType', 'Discipline', 'Imprint']:
-                        if col in df.columns:
-                            preview_cols.append(col)
-                    st.sidebar.dataframe(df.head(3)[preview_cols].fillna('N/A'))
+                # Show AI insights
+                if st.sidebar.checkbox("Show AI Analysis"):
+                    st.sidebar.write("**AI Recommendations:**")
+                    for rec in ai_analysis.get('recommendations', [])[:3]:
+                        st.sidebar.write(f"• {rec}")
                     
-                    # Show detected columns
-                    st.sidebar.write("**Detected columns:**")
+                    st.sidebar.write("**Detected Structure:**")
                     st.sidebar.write(f"📊 Sales columns: {len(sales_cols)}")
                     st.sidebar.write(f"📈 Quantity columns: {len(quantity_cols)}")
-                    st.sidebar.write(f"📚 Total columns: {len(df.columns)}")
+                    st.sidebar.write(f"📚 Categories: {len(ai_analysis.get('category_columns', []))}")
+                    
+                    if ai_analysis.get('data_quality_notes'):
+                        st.sidebar.write("**Data Quality Notes:**")
+                        for note in ai_analysis.get('data_quality_notes', [])[:2]:
+                            st.sidebar.write(f"⚠️ {note}")
+            
+            else:
+                # Fall back to basic validation
+                is_valid, validation_message = validate_uploaded_data(df_uploaded)
+                if not is_valid:
+                    st.sidebar.error(f"❌ {validation_message}")
+                    df, sales_cols, quantity_cols = load_data()
+                else:
+                    # Basic processing
+                    df_uploaded.columns = df_uploaded.columns.str.strip()
+                    df_uploaded['Index'] = df_uploaded['WorkRef'].astype(str) + '_' + df_uploaded.index.astype(str) if 'WorkRef' in df_uploaded.columns else 'ID_' + df_uploaded.index.astype(str)
+                    sales_cols = [col for col in df_uploaded.columns if 'Net Sales $' in col]
+                    quantity_cols = [col for col in df_uploaded.columns if 'Net Sales Q' in col]
+                    df, sales_cols, quantity_cols = df_uploaded, sales_cols, quantity_cols
+                    st.sidebar.success(f"✅ Data loaded successfully! ({len(df):,} titles)")
             
         except Exception as e:
             st.sidebar.error(f"❌ Error processing uploaded file: {str(e)}")
-            st.sidebar.error("Please make sure your CSV file has the required columns.")
             df, sales_cols, quantity_cols = load_data()
     else:
         # Use default data loading (demo or local file)
@@ -505,6 +728,14 @@ def main():
                          labels={'Active_Titles': 'Number of Titles'})
             fig2.update_layout(height=400)
             st.plotly_chart(fig2, use_container_width=True)
+            
+            # AI-powered trend analysis
+            st.subheader("🤖 AI Trend Analysis")
+            ai_insights = get_ai_trend_analysis(df, sales_cols, yearly_data)
+            st.info(ai_insights)
+        
+        else:
+            st.warning("No time series data available for detailed analysis.")
     
     elif analysis_type == "Time Series Analysis":
         st.header("📊 Time Series Analysis")
