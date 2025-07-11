@@ -70,8 +70,12 @@ def load_data():
         # Clean column names
         df.columns = df.columns.str.strip()
         
-        # Create Index column combining work reference, title info (anonymized)
-        df['Index'] = df['WorkRef'].astype(str) + '_' + df.index.astype(str)
+        # Use existing Index column if available, otherwise create from WorkRef
+        if 'Index' not in df.columns:
+            if 'WorkRef' in df.columns:
+                df['Index'] = df['WorkRef'].astype(str) + '_' + df.index.astype(str)
+            else:
+                df['Index'] = df.index.astype(str)
         
         # Extract year columns for sales data
         sales_cols = [col for col in df.columns if 'Net Sales $' in col and any(str(year) in col for year in range(2016, 2025))]
@@ -377,7 +381,13 @@ def main():
             else:
                 # Process the uploaded data similar to load_data function
                 df_uploaded.columns = df_uploaded.columns.str.strip()
-                df_uploaded['Index'] = df_uploaded['WorkRef'].astype(str) + '_' + df_uploaded.index.astype(str)
+                
+                # Use existing Index column if available, otherwise create from WorkRef
+                if 'Index' not in df_uploaded.columns:
+                    if 'WorkRef' in df_uploaded.columns:
+                        df_uploaded['Index'] = df_uploaded['WorkRef'].astype(str) + '_' + df_uploaded.index.astype(str)
+                    else:
+                        df_uploaded['Index'] = df_uploaded.index.astype(str)
                 
                 # Extract year columns for sales data
                 sales_cols = [col for col in df_uploaded.columns if 'Net Sales $' in col and any(str(year) in col for year in range(2016, 2025))]
@@ -424,17 +434,24 @@ def main():
         if df is not None and len(df) == 1000:  # Demo data indicator
             st.sidebar.info("📊 Currently using demo data. Upload your CSV file above to use real data.")
     
-    # Analysis options
-    analysis_type = st.sidebar.selectbox(
-        "Select Analysis Type",
-        ["Overview", "Time Series Analysis", "Category Analysis", "Editorial Analysis", 
-         "Format & Product Analysis", "Investment Analysis", "Projections", "Title Performance"]
-    )
+    # Create tabs for main navigation
+    tab1, tab2 = st.tabs(["📊 Analysis", "🔮 Projections"])
     
-    # Projection settings
-    if analysis_type == "Projections":
-        st.sidebar.subheader("Projection Settings")
-        projection_years = st.sidebar.slider("Years to Project", 1, 5, 3)
+    with tab1:
+        # Analysis options
+        analysis_type = st.sidebar.selectbox(
+            "Select Analysis Type",
+            ["Overview", "Time Series Analysis", "Category Analysis", "Editorial Analysis", 
+             "Format & Product Analysis", "Investment Analysis", "Title Performance"]
+        )
+    
+    with tab2:
+        # Projections functionality
+        st.header("🔮 Sales Projections")
+        
+        # Projection settings in tab
+        st.subheader("Projection Settings")
+        projection_years = st.slider("Years to Project", 1, 5, 3)
     
     # Create time series data
     yearly_data = create_time_series_data(df, sales_cols, quantity_cols)
@@ -727,6 +744,19 @@ def main():
     elif analysis_type == "Investment Analysis":
         st.header("💰 Investment Analysis")
         
+        # Find the most recent sales column for investment analysis
+        latest_sales_col = None
+        if sales_cols:
+            year_cols = []
+            for col in sales_cols:
+                for year in range(2024, 2015, -1):
+                    if str(year) in col:
+                        year_cols.append((year, col))
+                        break
+            if year_cols:
+                year_cols.sort(reverse=True)
+                latest_sales_col = year_cols[0][1]
+        
         if latest_sales_col:
             # Legacy vs Contemporary Analysis
             if 'PrincetonLegacyLibrary' in df.columns:
@@ -791,9 +821,6 @@ def main():
                         st.metric("Co-Pub Avg Sales", f"${copub_avg:,.0f}")
                         st.metric("Non Co-Pub Avg Sales", f"${non_copub_avg:,.0f}")
     
-    elif analysis_type == "Projections":
-        st.header("🔮 Sales Projections")
-        
         if not yearly_data.empty:
             # Create projections using all three methods
             methods = ['linear', 'polynomial', 'exponential_smoothing']
@@ -885,6 +912,8 @@ def main():
                 
             else:
                 st.warning("Unable to generate projections with available data.")
+        else:
+            st.warning("No time series data available for projections. Please ensure your data contains sales information with years.")
     
     elif analysis_type == "Title Performance":
         st.header("📖 Title Performance Analysis")
@@ -948,6 +977,8 @@ def main():
                 st.error(f"Error analyzing publication year data: {str(e)}")
         else:
             st.info("Publication year analysis requires FiscalYearOfPublication column and sales data.")
+    
+    # End of tab1 content
     
     # Data export option
     st.sidebar.subheader("Data Export")
