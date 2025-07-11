@@ -292,8 +292,8 @@ def create_time_series_data(df, sales_cols, quantity_cols):
     
     return pd.DataFrame(yearly_data)
 
-def create_projections(yearly_data, method='linear', years_ahead=5):
-    """Create projections using different methods with enhanced accuracy"""
+def create_projections(yearly_data, method='linear', years_ahead=5, confidence_level='Moderate'):
+    """Create projections using different methods with confidence level adjustments"""
     if len(yearly_data) < 2:
         return pd.DataFrame()
     
@@ -302,6 +302,15 @@ def create_projections(yearly_data, method='linear', years_ahead=5):
         method = 'linear'  # Fall back to linear for insufficient data
     
     X = yearly_data['Year'].values.reshape(-1, 1)
+    
+    # Confidence level multipliers
+    confidence_multipliers = {
+        'Conservative': 0.8,  # 20% reduction
+        'Moderate': 1.0,      # No change
+        'Optimistic': 1.2     # 20% increase
+    }
+    
+    multiplier = confidence_multipliers.get(confidence_level, 1.0)
     
     projections = {}
     future_years = [2025, 2026, 2027, 2028, 2029][:years_ahead]
@@ -346,23 +355,33 @@ def create_projections(yearly_data, method='linear', years_ahead=5):
                 model.fit(X, y)
                 future_X = np.array(future_years).reshape(-1, 1)
                 future_y = model.predict(future_X)
+                
+                # Apply confidence level adjustment to growth component
+                if len(y) >= 2:
+                    base_value = y[-1]  # Last known value
+                    growth_component = future_y - base_value
+                    adjusted_growth = growth_component * multiplier
+                    future_y = base_value + adjusted_growth
+                
                 # Ensure non-negative predictions for certain metrics
                 if metric in ['Total_Sales', 'Total_Quantity', 'Active_Titles']:
                     future_y = np.maximum(future_y, 0)
                 projections[metric] = future_y
             else:
-                # Exponential smoothing projection
+                # Exponential smoothing projection with confidence adjustment
                 last_value = smoothed[-1]
+                adjusted_trend = trend * multiplier
                 future_values = []
                 for i in range(years_ahead):
-                    future_values.append(max(0, last_value + trend * (i + 1)))
+                    future_values.append(max(0, last_value + adjusted_trend * (i + 1)))
                 projections[metric] = future_values
                 
         except Exception as e:
             # Fallback to simple linear trend if model fails
             if len(y) >= 2:
                 trend = (y[-1] - y[0]) / (len(y) - 1)
-                projections[metric] = [max(0, y[-1] + trend * (i + 1)) for i in range(years_ahead)]
+                adjusted_trend = trend * multiplier
+                projections[metric] = [max(0, y[-1] + adjusted_trend * (i + 1)) for i in range(years_ahead)]
             else:
                 projections[metric] = [y[0]] * years_ahead
     
@@ -1109,6 +1128,11 @@ def main():
             2. **Polynomial Regression**: Captures curved patterns, shows acceleration/deceleration
             3. **Exponential Smoothing**: Weights recent data more heavily, adapts to changes
             
+            **Confidence Levels:**
+            - **Conservative**: Reduces growth projections by 20% (multiplier: 0.8)
+            - **Moderate**: Uses baseline projections (multiplier: 1.0)
+            - **Optimistic**: Increases growth projections by 20% (multiplier: 1.2)
+            
             Each method provides different insights based on your data patterns.
             """)
         
@@ -1118,7 +1142,7 @@ def main():
             all_projections = []
             
             for method in methods:
-                projections = create_projections(yearly_data, method, projection_years)
+                projections = create_projections(yearly_data, method, projection_years, confidence_level)
                 if not projections.empty:
                     projections['Method'] = method.replace('_', ' ').title()
                     all_projections.append(projections)
